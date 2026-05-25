@@ -773,6 +773,8 @@ pub struct UiConfig {
     pub mouse_scroll_lines: Option<NonZeroUsize>,
     /// Ask for confirmation before closing a workspace. Default: true.
     pub confirm_close: bool,
+    /// Set the host terminal's window title to the active workspace name. Default: true.
+    pub set_window_title: bool,
     /// Ask for a tab name before creating a new tab. Default: true.
     pub prompt_new_tab_name: bool,
     /// Draw borders around split panes. Default: true.
@@ -967,6 +969,7 @@ impl Default for UiConfig {
             redraw_on_focus_gained: true,
             mouse_scroll_lines: None,
             confirm_close: true,
+            set_window_title: true,
             prompt_new_tab_name: true,
             pane_borders: true,
             pane_gaps: true,

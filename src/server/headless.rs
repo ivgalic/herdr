@@ -230,6 +230,10 @@ pub struct HeadlessServer {
     server_event_rx: mpsc::Receiver<ServerEvent>,
     /// Sender for server events (cloned for each client thread).
     server_event_tx: mpsc::Sender<ServerEvent>,
+    /// Last host window title sent to the foreground client, and which client
+    /// received it. Used to dedupe Title messages across render ticks.
+    last_title_sent: Option<String>,
+    last_title_client: Option<u64>,
 }
 
 fn apply_terminal_attach_scroll(
@@ -415,6 +419,8 @@ impl HeadlessServer {
             should_quit,
             server_event_rx,
             server_event_tx,
+            last_title_sent: None,
+            last_title_client: None,
         })
     }
 
@@ -2043,6 +2049,36 @@ impl HeadlessServer {
         self.send_to_client(client_id, msg)
     }
 
+    /// Pushes the active workspace name to the foreground client as its host
+    /// terminal title. Deduped on (client, title) so it only sends on a real
+    /// change — including when the foreground client itself changes.
+    fn sync_foreground_client_title(&mut self) {
+        if !self.app.state.set_window_title {
+            return;
+        }
+        let Some(client_id) = self.foreground_client_id else {
+            return;
+        };
+        let title = self
+            .app
+            .state
+            .active_window_title(&self.app.terminal_runtimes);
+        if self.last_title_client == Some(client_id)
+            && self.last_title_sent.as_deref() == Some(title.as_str())
+        {
+            return;
+        }
+        if self.send_to_client(
+            client_id,
+            ServerMessage::WindowTitle {
+                title: Some(title.clone()),
+            },
+        ) {
+            self.last_title_sent = Some(title);
+            self.last_title_client = Some(client_id);
+        }
+    }
+
     /// Sends a message to a specific client. Returns false if the client
     /// was not found or the send failed (client removed).
     fn send_to_client(&mut self, client_id: u64, msg: ServerMessage) -> bool {
@@ -3048,6 +3084,7 @@ impl HeadlessServer {
 
     fn render_and_stream(&mut self) {
         let full_started = crate::render_prof::timer();
+        self.sync_foreground_client_title();
         let render_targets = render_targets(&self.clients, self.foreground_client_id);
 
         if render_targets.is_empty() {
@@ -3944,6 +3981,8 @@ mod tests {
             should_quit,
             server_event_rx,
             server_event_tx,
+            last_title_sent: None,
+            last_title_client: None,
         }
     }
 
@@ -7056,6 +7095,88 @@ next_tab = ""
         assert!(
             !server.clients.contains_key(&1),
             "failed targeted send should remove the broken foreground client"
+        );
+    }
+
+    #[test]
+    fn workspace_title_forwarded_to_foreground_client_and_deduped() {
+        let mut server = test_headless_server();
+        let (foreground_tx, foreground_control_rx, _foreground_rx) = test_client_writer();
+        server.clients.insert(
+            1,
+            ClientConnection::new(
+                (80, 24),
+                crate::kitty_graphics::HostCellSize::default(),
+                crate::terminal_theme::TerminalTheme::default(),
+                None,
+                1,
+                RenderEncoding::SemanticFrame,
+                Some(foreground_tx),
+            ),
+        );
+        server.foreground_client_id = Some(1);
+
+        let alpha_idx = server.app.state.workspaces.len();
+        server
+            .app
+            .state
+            .workspaces
+            .push(crate::workspace::Workspace::test_new("alpha"));
+        server.app.state.active = Some(alpha_idx);
+
+        server.sync_foreground_client_title();
+        match read_server_message(
+            foreground_control_rx
+                .recv_timeout(Duration::from_millis(100))
+                .expect("title message"),
+        ) {
+            ServerMessage::WindowTitle { title } => assert_eq!(title.as_deref(), Some("alpha")),
+            other => panic!("expected title message, got {other:?}"),
+        }
+
+        // Unchanged active workspace must not re-send the title.
+        server.sync_foreground_client_title();
+        assert!(
+            foreground_control_rx
+                .recv_timeout(Duration::from_millis(50))
+                .is_err(),
+            "unchanged title should not be resent"
+        );
+
+        // Switching to a differently named workspace re-sends.
+        let beta_idx = server.app.state.workspaces.len();
+        server
+            .app
+            .state
+            .workspaces
+            .push(crate::workspace::Workspace::test_new("beta"));
+        server.app.state.active = Some(beta_idx);
+
+        server.sync_foreground_client_title();
+        match read_server_message(
+            foreground_control_rx
+                .recv_timeout(Duration::from_millis(100))
+                .expect("title message after switch"),
+        ) {
+            ServerMessage::WindowTitle { title } => assert_eq!(title.as_deref(), Some("beta")),
+            other => panic!("expected title message, got {other:?}"),
+        }
+
+        // Disabling the feature stops further title sends.
+        server.app.state.set_window_title = false;
+        let gamma_idx = server.app.state.workspaces.len();
+        server
+            .app
+            .state
+            .workspaces
+            .push(crate::workspace::Workspace::test_new("gamma"));
+        server.app.state.active = Some(gamma_idx);
+        server.sync_foreground_client_title();
+        assert!(
+            foreground_control_rx
+                .recv_timeout(Duration::from_millis(50))
+                .is_err(),
+            "no title should be sent when set_window_title is disabled"
         );
     }
 

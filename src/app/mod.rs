@@ -137,6 +137,8 @@ pub struct App {
     pub(crate) local_terminal_notifications: bool,
     pub(crate) config_reloaded_from_disk: bool,
     prefix_input_source: Box<dyn crate::platform::PrefixInputSource>,
+    /// Last host window title written to stdout (monolithic mode), for dedupe.
+    pub(crate) last_title_sent: Option<String>,
 }
 
 pub(crate) const APP_EVENT_CHANNEL_CAPACITY: usize = 256;
@@ -597,6 +599,7 @@ impl App {
             redraw_on_focus_gained: config.ui.redraw_on_focus_gained,
             mouse_scroll_lines: config.ui.mouse_scroll_lines(),
             confirm_close: config.ui.confirm_close,
+            set_window_title: config.ui.set_window_title,
             prompt_new_tab_name: config.ui.prompt_new_tab_name,
             pane_borders: config.ui.pane_borders,
             pane_gaps: config.ui.pane_gaps,
@@ -728,6 +731,7 @@ impl App {
             local_terminal_notifications: true,
             config_reloaded_from_disk: false,
             prefix_input_source: Box::new(crate::platform::RealPrefixInputSource::default()),
+            last_title_sent: None,
         }
     }
 
@@ -997,6 +1001,13 @@ impl App {
                     self.render_notify.notify_one();
                 }
                 self.last_render_at = Some(now);
+                if self.state.set_window_title {
+                    let title = self.state.active_window_title(&self.terminal_runtimes);
+                    if self.last_title_sent.as_deref() != Some(title.as_str()) {
+                        crate::client::write_window_title(Some(&title));
+                        self.last_title_sent = Some(title);
+                    }
+                }
                 needs_render = false;
                 continue;
             }
@@ -1329,6 +1340,7 @@ impl App {
                 self.state.right_click_passthrough_modifiers =
                     config.ui.right_click_passthrough_modifiers();
                 self.state.confirm_close = config.ui.confirm_close;
+                self.state.set_window_title = config.ui.set_window_title;
                 self.state.prompt_new_tab_name = config.ui.prompt_new_tab_name;
                 self.state.pane_borders = config.ui.pane_borders;
                 self.state.pane_gaps = config.ui.pane_gaps;

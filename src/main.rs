@@ -693,6 +693,7 @@ fn main() -> io::Result<()> {
         );
         let _ = set_host_color_scheme_reports(false);
         let _ = pop_keyboard_enhancement_flags();
+        let _ = std::io::Write::write_all(&mut io::stdout(), b"\x1b[23;0t");
         ratatui::restore();
         original_hook(info);
     }));
@@ -712,6 +713,9 @@ fn main() -> io::Result<()> {
 
     let result = rt.block_on(async {
         let mut terminal = ratatui::init();
+        // Save the host terminal's title so it is restored on exit (XTWINOPS push).
+        std::io::Write::write_all(&mut io::stdout(), b"\x1b[22;0t")?;
+        std::io::Write::flush(&mut io::stdout())?;
         if config.ui.mouse_capture {
             execute!(io::stdout(), EnableMouseCapture)?;
         } else {
@@ -757,6 +761,9 @@ fn main() -> io::Result<()> {
             DisableMouseCapture
         )?;
         set_host_color_scheme_reports(false)?;
+        // Restore the title saved at startup (XTWINOPS pop).
+        std::io::Write::write_all(&mut io::stdout(), b"\x1b[23;0t")?;
+        std::io::Write::flush(&mut io::stdout())?;
         ratatui::restore();
 
         // Drop app (and all workspaces/panes) before runtime shuts down

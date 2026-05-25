@@ -343,6 +343,10 @@ fn setup_terminal_with_capabilities(
             write_host_color_scheme_report_mode(&mut io::stdout(), true)?;
         }
         push_keyboard_enhancement_flags()?;
+        // Save the host terminal's current title so quitting Herdr restores it
+        // (XTWINOPS push; popped in restore_terminal_state).
+        io::stdout().write_all(b"\x1b[22;0t")?;
+        io::stdout().flush()?;
     } else {
         if should_query_host_terminal_theme() {
             write_host_color_scheme_report_mode(&mut io::stdout(), false)?;
@@ -389,6 +393,7 @@ fn setup_terminal_with_capabilities(
         reset_host_color_scheme_reports: host_color_scheme_reports,
         #[cfg(windows)]
         restore_windows_input_mode: windows_virtual_terminal_input.restore_mode,
+        restore_title: enable_client_protocols,
     })
 }
 
@@ -402,6 +407,9 @@ struct TerminalGuard {
     reset_host_color_scheme_reports: bool,
     #[cfg(windows)]
     restore_windows_input_mode: Option<u32>,
+    /// Whether a title was pushed onto the terminal's title stack at setup and
+    /// must be popped on teardown.
+    restore_title: bool,
 }
 
 fn write_host_color_scheme_report_mode(
@@ -532,6 +540,7 @@ fn restore_terminal_state(
     reset_modify_other_keys: bool,
     reset_host_color_scheme_reports: bool,
     #[cfg(windows)] restore_windows_input_mode: Option<u32>,
+    restore_title: bool,
 ) {
     let _ = clear_received_kitty_graphics(&mut io::stdout());
 
@@ -542,6 +551,11 @@ fn restore_terminal_state(
     }
 
     let _ = pop_keyboard_enhancement_flags();
+    // Restore the title saved at setup (XTWINOPS pop).
+    if restore_title {
+        let _ = io::stdout().write_all(b"\x1b[23;0t");
+        let _ = io::stdout().flush();
+    }
 
     let _ = execute!(
         io::stdout(),
@@ -612,6 +626,7 @@ impl Drop for TerminalGuard {
             self.reset_host_color_scheme_reports,
             #[cfg(windows)]
             self.restore_windows_input_mode,
+            self.restore_title,
         );
     }
 }
@@ -906,6 +921,7 @@ fn run_client_with_mode(
     let panic_resets_host_color_scheme_reports = terminal_guard.reset_host_color_scheme_reports;
     #[cfg(windows)]
     let panic_restore_windows_input_mode = terminal_guard.restore_windows_input_mode;
+    let restore_title = !direct_attach;
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore_terminal_state(
@@ -913,6 +929,7 @@ fn run_client_with_mode(
             panic_resets_host_color_scheme_reports,
             #[cfg(windows)]
             panic_restore_windows_input_mode,
+            restore_title,
         );
         original_hook(info);
     }));
@@ -1495,7 +1512,7 @@ fn window_title_osc(title: Option<&str>) -> Vec<u8> {
     format!("\x1b]0;{safe_title}\x07").into_bytes()
 }
 
-fn write_window_title(title: Option<&str>) {
+pub(crate) fn write_window_title(title: Option<&str>) {
     let _ = io::stdout().write_all(&window_title_osc(title));
 }
 

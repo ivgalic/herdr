@@ -2926,6 +2926,17 @@ mod tests {
         state
     }
 
+    #[test]
+    fn active_window_title_uses_active_workspace_name() {
+        let runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        let mut state = app_with_workspaces(&["alpha", "beta"]);
+        assert_eq!(state.active_window_title(&runtimes), "alpha");
+        state.active = Some(1);
+        assert_eq!(state.active_window_title(&runtimes), "beta");
+        state.active = None;
+        assert_eq!(state.active_window_title(&runtimes), "herdr");
+    }
+
     fn mark_linked_worktree(state: &mut AppState, ws_idx: usize) {
         state.workspaces[ws_idx].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),

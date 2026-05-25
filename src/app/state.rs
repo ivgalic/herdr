@@ -1361,6 +1361,8 @@ pub struct AppState {
     pub redraw_on_focus_gained: bool,
     pub mouse_scroll_lines: usize,
     pub confirm_close: bool,
+    /// Set the host terminal's window title to the active workspace name.
+    pub set_window_title: bool,
     pub prompt_new_tab_name: bool,
     pub pane_borders: bool,
     pub pane_gaps: bool,
@@ -1509,6 +1511,18 @@ impl AppState {
         terminal_runtimes: &crate::terminal::TerminalRuntimeRegistry,
     ) -> bool {
         self.mouse_capture || self.focused_pane_requests_mouse_capture_from(terminal_runtimes)
+    }
+
+    /// The host terminal title for the current state: the active workspace's
+    /// display name, or "herdr" when no workspace is active.
+    pub fn active_window_title(
+        &self,
+        terminal_runtimes: &crate::terminal::TerminalRuntimeRegistry,
+    ) -> String {
+        self.active
+            .and_then(|idx| self.workspaces.get(idx))
+            .map(|ws| ws.display_name_from(&self.terminals, terminal_runtimes))
+            .unwrap_or_else(|| "herdr".into())
     }
 
     pub fn is_prefix_key(&self, key: crate::input::TerminalKey) -> bool {
@@ -1717,6 +1731,7 @@ impl AppState {
             redraw_on_focus_gained: true,
             mouse_scroll_lines: crate::config::DEFAULT_MOUSE_SCROLL_LINES,
             confirm_close: true,
+            set_window_title: true,
             prompt_new_tab_name: true,
             pane_borders: true,
             pane_gaps: false,
